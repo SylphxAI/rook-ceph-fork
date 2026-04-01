@@ -75,26 +75,79 @@ with open("pkg/operator/ceph/cluster/mon/health.go", "w") as f:
 print("Patched health.go")
 
 # ============================================================
-# Patch 4: cr_manager.go — increase CacheSyncTimeout from 2m to 10m
-# With 25+ CRD informers all syncing concurrently, 2m is too tight.
-# The API server responds in <1s but under load some informers
-# don't sync before the default 2-minute deadline.
+# Patch 4: cr_manager.go — disable unused controllers
+# Each Rook controller uses controller.New() which defaults to
+# a 2-minute CacheSyncTimeout. With 21 informers starting
+# concurrently, some fail to sync in time. The manager-level
+# config.Controller.CacheSyncTimeout does NOT propagate to
+# controllers created via controller.New() (only builder pattern).
+# Fix: remove controllers for CRDs we don't use, reducing
+# informer count from 21 to 10.
 # ============================================================
 with open("pkg/operator/ceph/cr_manager.go") as f:
     code = f.read()
 
-# Add "time" import
-code = code.replace(
-    '\t"context"\n',
-    '\t"context"\n\t"time"\n'
-)
+# Replace AddToManagerFuncs slice — keep only what we need
+old_slice = '''var AddToManagerFuncs = []func(manager.Manager, *clusterd.Context, context.Context, opcontroller.OperatorConfig) error{
+	nodedaemon.Add,
+	pool.Add,
+	objectuser.Add,
+	realm.Add,
+	zonegroup.Add,
+	zone.Add,
+	object.Add,
+	file.Add,
+	nfs.Add,
+	rbd.Add,
+	client.Add,
+	nvmeof.Add,
+	mirror.Add,
+	Add,
+	csi.Add,
+	bucket.Add,
+	topic.Add,
+	notification.Add,
+	subvolumegroup.Add,
+	radosnamespace.Add,
+	cosi.Add,
+}'''
 
-# Increase CacheSyncTimeout from 2m default to 10m
-code = code.replace(
-    'Controller: config.Controller{\n\t\t\tSkipNameValidation: &skipNameValidation,\n\t\t},',
-    'Controller: config.Controller{\n\t\t\tSkipNameValidation: &skipNameValidation,\n\t\t\tCacheSyncTimeout:   10 * time.Minute, // FORK: 25+ informers need more time than 2m default\n\t\t},'
-)
+new_slice = '''// FORK: Reduced controller set — only controllers for CRDs we actually use.
+// Removes 11 unused controllers (realm, zonegroup, zone, nfs, rbd, client,
+// nvmeof, mirror, topic, notification, cosi) to eliminate cache sync timeouts.
+// Each controller starts an informer; 21 concurrent informers exceeded the
+// 2-minute per-controller CacheSyncTimeout on startup.
+var AddToManagerFuncs = []func(manager.Manager, *clusterd.Context, context.Context, opcontroller.OperatorConfig) error{
+	nodedaemon.Add,
+	pool.Add,
+	objectuser.Add,
+	object.Add,
+	file.Add,
+	Add,
+	csi.Add,
+	bucket.Add,
+	subvolumegroup.Add,
+	radosnamespace.Add,
+}
+
+// FORK: Keep removed imports referenced to avoid Go compile errors.
+var (
+	_ = realm.Add
+	_ = zonegroup.Add
+	_ = zone.Add
+	_ = nfs.Add
+	_ = rbd.Add
+	_ = client.Add
+	_ = nvmeof.Add
+	_ = mirror.Add
+	_ = topic.Add
+	_ = notification.Add
+	_ = cosi.Add
+)'''
+
+assert old_slice in code, "FATAL: AddToManagerFuncs slice not found — source changed?"
+code = code.replace(old_slice, new_slice)
 
 with open("pkg/operator/ceph/cr_manager.go", "w") as f:
     f.write(code)
-print("Patched cr_manager.go — CacheSyncTimeout 10m")
+print("Patched cr_manager.go — reduced controllers from 21 to 10")
