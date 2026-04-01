@@ -2,9 +2,10 @@ FROM golang:1.25 AS builder
 RUN git clone --depth 1 --branch v1.19.3 https://github.com/rook/rook.git /src
 WORKDIR /src
 
-# FORK v3: Make Rook work with external cephadm MONs
-# Core idea: if MONs already exist in ClusterInfo (from mon-endpoints ConfigMap),
-# skip all MON pod management. Just write config and proceed to OSD.
+# FORK v4: Gradual MON migration from cephadm to Rook
+# Classifies each MON as external (cephadm, no K8s Deployment) or rook (has Deployment).
+# If all MONs are external: save config and skip pod management.
+# If rookTarget > 0: manage only the Rook MON subset via startMons(), preserve external MONs.
 
 COPY patch.py /tmp/patch.py
 RUN python3 /tmp/patch.py
