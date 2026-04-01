@@ -73,3 +73,28 @@ code = code.replace(
 with open("pkg/operator/ceph/cluster/mon/health.go", "w") as f:
     f.write(code)
 print("Patched health.go")
+
+# ============================================================
+# Patch 4: cr_manager.go — increase CacheSyncTimeout from 2m to 10m
+# With 25+ CRD informers all syncing concurrently, 2m is too tight.
+# The API server responds in <1s but under load some informers
+# don't sync before the default 2-minute deadline.
+# ============================================================
+with open("pkg/operator/ceph/cr_manager.go") as f:
+    code = f.read()
+
+# Add "time" import
+code = code.replace(
+    '\t"context"\n',
+    '\t"context"\n\t"time"\n'
+)
+
+# Increase CacheSyncTimeout from 2m default to 10m
+code = code.replace(
+    'Controller: config.Controller{\n\t\t\tSkipNameValidation: &skipNameValidation,\n\t\t},',
+    'Controller: config.Controller{\n\t\t\tSkipNameValidation: &skipNameValidation,\n\t\t\tCacheSyncTimeout:   10 * time.Minute, // FORK: 25+ informers need more time than 2m default\n\t\t},'
+)
+
+with open("pkg/operator/ceph/cr_manager.go", "w") as f:
+    f.write(code)
+print("Patched cr_manager.go — CacheSyncTimeout 10m")
