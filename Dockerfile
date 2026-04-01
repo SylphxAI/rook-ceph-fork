@@ -2,27 +2,39 @@ FROM golang:1.25 AS builder
 RUN git clone --depth 1 --branch v1.19.3 https://github.com/rook/rook.git /src
 WORKDIR /src
 
-# Patch 1: Reduce canary retries (fast fail instead of infinite loop)
-RUN sed -i 's/canaryRetries           = 30/canaryRetries           = 1/' pkg/operator/ceph/cluster/mon/mon.go
+# ============================================================
+# FORK PATCH: Make Rook work with external cephadm MONs
+# ============================================================
 
-# Patch 2: Bypass MON scheduling failure in cluster.go
-RUN sed -i 's|return errors.Wrap(err, "failed to start ceph monitors")|logger.Warningf("FORK: MON start failed (%v), bypassing", err); if c.ClusterInfo != nil \&\& c.ClusterInfo.IsInitialized() == nil { logger.Infof("FORK: External MON quorum OK") } else { return errors.Wrap(err, "failed to start ceph monitors") }|' pkg/operator/ceph/cluster/cluster.go
-RUN sed -i 's|return errors.Wrap(err, "failed to start ceph mgr")|logger.Warningf("FORK: MGR failed (%v), continuing", err)|' pkg/operator/ceph/cluster/cluster.go
-RUN sed -i 's|return errors.Wrap(err, "failed to execute post actions after all the ceph monitors started")|logger.Warningf("FORK: post-mon failed, continuing", err)|' pkg/operator/ceph/cluster/cluster.go
-RUN sed -i 's|return errors.Wrap(err, "failed to execute post actions after all the ceph managers started")|logger.Warningf("FORK: post-mgr failed, continuing", err)|' pkg/operator/ceph/cluster/cluster.go
+# Patch 1: In mons.Start(), after initClusterInfo, if external MONs
+# are already in quorum, write config + return success. Skip all
+# MON pod management (canary, assign, start).
+RUN sed -i '/log.NamespacedInfo(c.Namespace, logger, "targeting the mon count %d", c.spec.Mon.Count)/,/return c.ClusterInfo, c.startMons(c.spec.Mon.Count)/c\
+\t// FORK: If external MONs are already providing quorum, skip all MON pod management.\n\
+\t// This enables Rook to manage OSDs while cephadm manages MONs.\n\
+\tif len(c.ClusterInfo.Monitors) > 0 {\n\
+\t\tlog.NamespacedInfo(c.Namespace, logger, "FORK: %d external MONs detected in ClusterInfo, skipping MON pod management", len(c.ClusterInfo.Monitors))\n\
+\t\tif err := c.saveMonConfig(); err != nil {\n\
+\t\t\tlog.NamespacedWarning(c.Namespace, logger, "FORK: failed to save mon config, continuing: %v", err)\n\
+\t\t}\n\
+\t\treturn c.ClusterInfo, nil\n\
+\t}\n\
+\tlog.NamespacedInfo(c.Namespace, logger, "targeting the mon count %d", c.spec.Mon.Count)\n\
+\treturn c.ClusterInfo, c.startMons(c.spec.Mon.Count)' pkg/operator/ceph/cluster/mon/mon.go
 
-# Patch 3: CRITICAL — prevent removal of MONs not managed by Rook (health.go line 239-245)
-# Change: if mon is in quorum but not in clusterInfo, SKIP removal (log warning only)
+# Patch 2: Bypass MGR failure in cluster.go (MGR is also on cephadm)
+RUN sed -i 's|return errors.Wrap(err, "failed to start ceph mgr")|logger.Warningf("FORK: MGR failed (%v), continuing with external MGR", err)|' pkg/operator/ceph/cluster/cluster.go
+RUN sed -i 's|return errors.Wrap(err, "failed to execute post actions after all the ceph monitors started")|logger.Warningf("FORK: post-mon failed (%v), continuing", err)|' pkg/operator/ceph/cluster/cluster.go
+RUN sed -i 's|return errors.Wrap(err, "failed to execute post actions after all the ceph managers started")|logger.Warningf("FORK: post-mgr failed (%v), continuing", err)|' pkg/operator/ceph/cluster/cluster.go
+
+# Patch 3: Prevent MON health check from removing external MONs
 RUN sed -i '/mon %q not in source of truth but in quorum, removing/{n;s|if err := c.removeMon(mon.Name); err != nil {|logger.Warningf("FORK: skipping removal of external mon %q (not managed by Rook)", mon.Name); if false \&\& err != nil {|}' pkg/operator/ceph/cluster/mon/health.go
 
-# Patch 4: CRITICAL — prevent removal of external MONs from clusterInfo when out of quorum (health.go line 470-474)
+# Patch 4: Never remove external MONs from clusterInfo when out of quorum
 RUN sed -i 's|} else if !inQuorum \&\& inInfo {|} else if !inQuorum \&\& inInfo \&\& false /* FORK: never remove external mons */ {|' pkg/operator/ceph/cluster/mon/health.go
 
-# Patch 5: prevent removal at line 1001
-RUN sed -i 's|"monitor %q is not part of the external cluster monitor quorum, removing it"|"FORK: monitor %q is not part of external quorum, SKIPPING removal"|' pkg/operator/ceph/cluster/mon/health.go
-
-# Verify patches
-RUN echo "=== FORK patches ===" && grep -c "FORK:" pkg/operator/ceph/cluster/cluster.go pkg/operator/ceph/cluster/mon/health.go pkg/operator/ceph/cluster/mon/mon.go
+# Verify
+RUN echo "=== FORK patches ===" && grep -c "FORK:" pkg/operator/ceph/cluster/cluster.go pkg/operator/ceph/cluster/mon/mon.go pkg/operator/ceph/cluster/mon/health.go
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /rook ./cmd/rook/
 
