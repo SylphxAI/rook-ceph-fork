@@ -79,20 +79,27 @@ new = '''	// FORK: Gradual migration — support mixed cephadm + Rook MON cluste
 		"FORK: targeting %d Rook MON pod(s) (plus %d external) to reach desired %d",
 		rookTarget, externalCount, desiredCount)
 
-	// Temporarily remove external MONs from ClusterInfo so startMons() only sees/manages
-	// the Rook subset. This prevents Rook from trying to create Deployments for cephadm MONs.
+	// Move external MONs from InternalMonitors to ExternalMons.
+	// This prevents Rook from creating Deployments for cephadm MONs,
+	// while keeping them visible for endpoint discovery — so new Rook MONs
+	// can properly JOIN the existing cluster (not bootstrap a fresh one).
 	savedInternal := c.ClusterInfo.InternalMonitors
 	savedExternal := c.ClusterInfo.ExternalMons
-	rookOnly := make(map[string]*cephclient.MonInfo, len(rookMons))
+
+	rookInternal := make(map[string]*cephclient.MonInfo, len(rookMons))
 	for id, mon := range rookMons {
-		rookOnly[id] = mon
+		rookInternal[id] = mon
 	}
-	c.ClusterInfo.InternalMonitors = rookOnly
-	c.ClusterInfo.ExternalMons = nil
+	externalMonInfos := make(map[string]*cephclient.MonInfo, len(externalMons))
+	for id, mon := range externalMons {
+		externalMonInfos[id] = mon
+	}
+	c.ClusterInfo.InternalMonitors = rookInternal
+	c.ClusterInfo.ExternalMons = externalMonInfos
 
 	startErr := c.startMons(rookTarget)
 
-	// Restore the full monitor set (rook + external) regardless of error.
+	// Restore the full monitor set regardless of error.
 	c.ClusterInfo.InternalMonitors = savedInternal
 	c.ClusterInfo.ExternalMons = savedExternal
 
@@ -100,15 +107,14 @@ new = '''	// FORK: Gradual migration — support mixed cephadm + Rook MON cluste
 		return c.ClusterInfo, errors.Wrap(startErr, "FORK: failed to start rook mon pods")
 	}
 
-	// Merge any newly-created Rook MONs back into InternalMonitors.
-	// startMons() may have added entries to the rookOnly map during provisioning.
-	for id, mon := range rookOnly {
+	// Merge any newly-created Rook MONs into InternalMonitors.
+	for id, mon := range rookInternal {
 		if _, exists := c.ClusterInfo.InternalMonitors[id]; !exists {
 			c.ClusterInfo.InternalMonitors[id] = mon
 		}
 	}
 
-	// Save the combined config (external + rook MONs).
+	// Save combined config (external + rook MONs).
 	if err := c.saveMonConfig(); err != nil {
 		return c.ClusterInfo, errors.Wrap(err, "FORK: failed to save combined mon config")
 	}
