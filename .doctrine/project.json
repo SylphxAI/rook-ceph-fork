@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "repo": "SylphxAI/rook-ceph-fork",
+    "name": "Rook Ceph Fork",
+    "lifecycle": "active",
+    "layer": "integration",
+    "summary": "Rook Ceph Fork builds a patched Rook/Ceph container image from a pinned upstream Rook version and publishes a GHCR image artifact from main.",
+    "goals": [
+      "Maintain a minimal, auditable patch set on top of a specific upstream Rook version.",
+      "Build the patched Rook binary into a container image.",
+      "Publish GHCR image artifacts from main with digest/readback evidence."
+    ],
+    "nonGoals": [
+      "Become the upstream Rook source of truth.",
+      "Own cluster rollout policy, Ceph operations, or Kubernetes runtime configuration outside this image artifact.",
+      "Push release images from pull requests or non-main branches."
+    ]
+  },
+  "boundaries": {
+    "owns": [
+      {
+        "name": "rook-fork-patch",
+        "description": "The Dockerfile and patch.py changes applied to the pinned upstream Rook source during image build."
+      },
+      {
+        "name": "rook-fork-image-build",
+        "description": "GitHub Actions build and GHCR image publication for the forked Rook image artifact."
+      }
+    ],
+    "doesNotOwn": [
+      "Upstream Rook source control, release policy, or project roadmap.",
+      "Production cluster rollout manifests, Ceph runtime policy, or incident recovery outside image artifact handoff.",
+      "Organization-wide infrastructure policy."
+    ],
+    "publicSurfaces": [
+      {
+        "type": "container-image",
+        "name": "Forked Rook/Ceph image",
+        "location": "ghcr.io/sylphxai/rook-ceph-fork:v1.19.3-mon-bypass"
+      },
+      {
+        "type": "patch",
+        "name": "Rook patch script",
+        "location": "patch.py"
+      },
+      {
+        "type": "workflow",
+        "name": "Image build workflow",
+        "location": ".github/workflows/build.yml"
+      }
+    ],
+    "allowedDependencies": [
+      {
+        "repo": "SylphxAI/doctrine",
+        "surface": "enterprise engineering doctrine",
+        "direction": "downward"
+      },
+      {
+        "repo": "rook/rook",
+        "surface": "upstream Rook source at the Dockerfile-pinned tag",
+        "direction": "upstream-source"
+      }
+    ],
+    "forbiddenCouplings": [
+      "Do not push GHCR images from pull requests or non-main branches.",
+      "Do not silently change the upstream Rook version, image tag, or patch purpose.",
+      "Do not encode cluster-specific rollout policy in the image build repository."
+    ]
+  },
+  "documentation": {
+    "adr": {
+      "path": "docs/adr/",
+      "status": "planned"
+    },
+    "specs": {
+      "path": "Dockerfile, patch.py",
+      "status": "present"
+    },
+    "catalog": {
+      "path": "PROJECT.md",
+      "status": "present"
+    },
+    "runbooks": {
+      "path": "AGENTS.md",
+      "status": "present"
+    },
+    "generatedReferences": {
+      "path": "ghcr.io/sylphxai/rook-ceph-fork",
+      "status": "generated"
+    }
+  },
+  "delivery": {
+    "ciModel": "legacy-ci",
+    "requiredContexts": [
+      "build"
+    ],
+    "deployPath": "Pull requests build the image without pushing; main branch pushes may publish ghcr.io/sylphxai/rook-ceph-fork:v1.19.3-mon-bypass through .github/workflows/build.yml.",
+    "productionProof": "GitHub Actions build success, GHCR image digest readback for main publications, and downstream cluster rollout/readback evidence before claiming runtime adoption.",
+    "recoveryClass": "forward-fix-only"
+  },
+  "adoption": {
+    "status": "baseline",
+    "gaps": [
+      {
+        "id": "runtime-rollout-proof",
+        "description": "The repository can prove image build and publication; production cluster adoption proof lives in the consuming infrastructure rollout.",
+        "owner": "SylphxAI/rook-ceph-fork",
+        "target": "before runtime adoption claims"
+      }
+    ]
+  }
+}
