@@ -8,8 +8,6 @@ forked image to GHCR for controlled infrastructure use.
 
 - Lifecycle: `active`
 - Layer: `integration`
-- Doctrine source of truth: [SylphxAI/doctrine](https://github.com/SylphxAI/doctrine)
-- Machine manifest: `.doctrine/project.json`
 
 ## Goals
 
